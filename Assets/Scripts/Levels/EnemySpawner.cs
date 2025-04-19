@@ -1,3 +1,5 @@
+// EnemySpawner.cs — countdown inlined inside RunWaves (always 3 seconds)
+
 using UnityEngine;
 using Newtonsoft.Json;
 using System.Collections;
@@ -8,152 +10,97 @@ using RpnComponents;
 
 public class EnemySpawner : MonoBehaviour
 {
-    public Image level_selector;
+    [Header("UI")] public Image level_selector;
     public GameObject button;
-    public GameObject enemy;
+
+    [Header("Prefabs & Points")] public GameObject enemy;
     public SpawnPoint[] SpawnPoints;
 
-    private WaveData currentWave;
-    private EnemyData firstEnemy;
+    Dictionary<string, EnemyData> enemyLUT;
+    WaveData currentWave;
 
     void Start()
     {
-        string enemiesPath = "enemies";
-        TextAsset enemiesFile = Resources.Load<TextAsset>(enemiesPath);
+        // cache enemy base stats
+        var list = JsonConvert.DeserializeObject<List<EnemyData>>(Resources.Load<TextAsset>("enemies").text);
+        enemyLUT = new Dictionary<string, EnemyData>();
+        foreach (var e in list) enemyLUT[e.name] = e;
 
-        if (enemiesFile != null)
-        {
-            List<EnemyData> enemyData = JsonConvert.DeserializeObject<List<EnemyData>>(enemiesFile.text);
-            firstEnemy = enemyData[0]; 
-        }
-        else
-        {
-            Debug.LogError("Failed to load enemies.json");
-            return;
-        }
-
-        GameObject selector = Instantiate(button, level_selector.transform);
-        selector.transform.localPosition = new Vector3(0, 130);
-        selector.GetComponent<MenuSelectorController>().spawner = this;
-        selector.GetComponent<MenuSelectorController>().SetLevel("Start");
+        // "Easy" button (default right now)
+        var sel = Instantiate(button, level_selector.transform);
+        sel.transform.localPosition = new Vector3(0, 130);
+        sel.GetComponent<MenuSelectorController>().spawner = this;
+        sel.GetComponent<MenuSelectorController>().SetLevel("Easy");
     }
 
     public void StartLevel(string levelName)
     {
-        if (level_selector != null)
-        {
-            level_selector.gameObject.SetActive(false);
-        }
+        level_selector.gameObject.SetActive(false);
+        GameManager.Instance.player.GetComponent<PlayerController>().StartLevel();
 
-        if (GameManager.Instance.player != null)
-        {
-            GameManager.Instance.player.GetComponent<PlayerController>().StartLevel();
-        }
-
-        string levelsPath = "levels";
-        TextAsset levelsFile = Resources.Load<TextAsset>(levelsPath);
-        if (levelsFile != null)
-        {
-            List<WaveData> waveData = JsonConvert.DeserializeObject<List<WaveData>>(levelsFile.text);
-            currentWave = waveData.Find(w => w.name == levelName); // Find the wave data for the specified level
-
-            if (currentWave != null)
-            {
-                GameManager.Instance.state = GameManager.GameState.INWAVE; // Update game state
-                StartCoroutine(SpawnWave());
-            }
-            else
-            {
-                Debug.LogError($"Level '{levelName}' not found in levels.json.");
-            }
-        }
-        else
-        {
-            Debug.LogError("Failed to load levels.json.");
-        }
+        var levels = JsonConvert.DeserializeObject<List<WaveData>>(Resources.Load<TextAsset>("levels").text);
+        currentWave = levels.Find(l => l.name == levelName);
+        StartCoroutine(RunWaves());
     }
 
-    public void NextWave()
+    IEnumerator RunWaves()
     {
-        StartCoroutine(SpawnWave());
-    }
-
-    IEnumerator SpawnWave()
-    {
-        Debug.Log("Starting wave...");
-
-        GameManager.Instance.state = GameManager.GameState.COUNTDOWN;
-        GameManager.Instance.countdown = 3;
-        for (int i = 3; i > 0; i--)
+        for (int wave = 1; wave <= currentWave.waves; wave++)
         {
+            // countdown
+            GameManager.Instance.state = GameManager.GameState.COUNTDOWN;
+            GameManager.Instance.countdown = 3;
             yield return new WaitForSeconds(1);
-            GameManager.Instance.countdown--;
-        }
+            GameManager.Instance.countdown = 2;
+            yield return new WaitForSeconds(1);
+            GameManager.Instance.countdown = 1;
+            yield return new WaitForSeconds(1);
 
-        GameManager.Instance.state = GameManager.GameState.INWAVE;
+            GameManager.Instance.state = GameManager.GameState.INWAVE;
 
-        foreach (var spawn in currentWave.spawns)
-        {
-            int waveNumber = 1; 
-            float baseHp = firstEnemy.hp; 
-            int count = EnemyCountCalculator.CalculateCount(spawn.count, waveNumber);
-            float hp = EnemyHpCalculator.CalculateHp(spawn.hp, waveNumber, baseHp);
-
-            Debug.Log($"Spawning {count} enemies of type {spawn.enemy} with HP = {hp}");
-
-            for (int i = 0; i < count; i++)
+            foreach (var spawn in currentWave.spawns)
             {
-                yield return SpawnEnemy(spawn.enemy, hp);
+                var stats = enemyLUT[spawn.enemy];
+                int   total = EnemyCountCalculator.CalculateCount(spawn.count, wave);
+                float hp    = EnemyHpCalculator.CalculateHp(spawn.hp, wave, stats.hp);
+
+                int spawned = 0;
+                float delay = float.Parse(spawn.delay);
+                foreach (int batch in spawn.sequence)
+                {
+                    for (int i = 0; i < batch && spawned < total; i++)
+                    {
+                        SpawnSingle(stats, hp);
+                        spawned++;
+                    }
+                    if (spawned < total) yield return new WaitForSeconds(delay);
+                }
+                while (spawned < total) { SpawnSingle(stats, hp); spawned++; }
             }
+
+            // wait until all are cleared
+            yield return new WaitWhile(() => GameManager.Instance.enemy_count > 0);
+            GameManager.Instance.state = GameManager.GameState.WAVEEND;
         }
-
-        yield return new WaitWhile(() => GameManager.Instance.enemy_count > 0);
-
-        GameManager.Instance.state = GameManager.GameState.WAVEEND;
-        Debug.Log("Wave ended.");
     }
 
-    IEnumerator SpawnEnemy(string enemyType, float hp)
+    //  create enemy object one by one
+    void SpawnSingle(EnemyData stats, float hp)
     {
-        SpawnPoint spawnPoint = SpawnPoints[Random.Range(0, SpawnPoints.Length)];
-        Vector2 offset = Random.insideUnitCircle * 1.8f;
-        Vector3 position = spawnPoint.transform.position + new Vector3(offset.x, offset.y, 0);
+        var sp  = SpawnPoints[Random.Range(0, SpawnPoints.Length)];
+        var pos = sp.transform.position + (Vector3)(Random.insideUnitCircle * 1.8f);
+        var obj = Instantiate(enemy, pos, Quaternion.identity);
+        obj.GetComponent<SpriteRenderer>().sprite = GameManager.Instance.enemySpriteManager.Get(stats.sprite);
 
-        Debug.Log($"Spawning enemy: {enemyType} at position {position}");
+        var ec = obj.GetComponent<EnemyController>();
+        ec.hp    = new Hittable(Mathf.RoundToInt(hp), Hittable.Team.MONSTERS, obj);
+        ec.speed = Mathf.RoundToInt(stats.speed);
 
-        // Instantiate the enemy
-        GameObject newEnemy = Instantiate(enemy, position, Quaternion.identity);
-
-        // Assign enemy properties (e.g., HP)
-        newEnemy.GetComponent<SpriteRenderer>().sprite = GameManager.Instance.enemySpriteManager.Get(0); // Example sprite
-        EnemyController en = newEnemy.GetComponent<EnemyController>();
-        en.hp = new Hittable(Mathf.RoundToInt(hp), Hittable.Team.MONSTERS, newEnemy);
-        en.speed = Mathf.RoundToInt(firstEnemy.speed); // Convert float to int
-        GameManager.Instance.AddEnemy(newEnemy);
-
-        yield return new WaitForSeconds(0.5f); // Delay between spawns
+        GameManager.Instance.AddEnemy(obj);
     }
 }
 
-public class WaveData
-{
-    public string name { get; set; }
-    public int waves { get; set; }
-    public List<SpawnData> spawns { get; set; }
-}
-
-public class SpawnData
-{
-    public string enemy { get; set; }
-    public string count { get; set; }
-    public string hp { get; set; }
-}
-
-public class EnemyData
-{
-    public string name { get; set; }
-    public int sprite { get; set; }
-    public float hp { get; set; }
-    public float speed { get; set; }
-    public float damage { get; set; }
-}
+// JSON containers
+[System.Serializable] public class WaveData  { public string name;  public int waves;  public List<SpawnData> spawns; }
+[System.Serializable] public class SpawnData { public string enemy; public string count; public string hp; public string delay; public int[] sequence; }
+[System.Serializable] public class EnemyData  { public string name;  public int sprite; public float hp; public float speed; public float damage; }

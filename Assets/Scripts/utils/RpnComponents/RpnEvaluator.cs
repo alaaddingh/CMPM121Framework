@@ -14,7 +14,6 @@ namespace Rpn
             {
                 if (float.TryParse(token, out float number))
                 {
-                    // If the token is number, push
                     nums.Push(number);
                 }
                 else
@@ -41,16 +40,14 @@ namespace Rpn
                             result = num1 * num2;
                             break;
                         case "/":
-                            if (num2 == 0)
-                            {
-                                Debug.LogError("Division by zero in RPN expression.");
-                                return float.NaN; // error
-                            }
                             result = num1 / num2;
+                            break;
+                        case "%":
+                            result = num1 % num2;
                             break;
                         default:
                             Debug.LogError($"Invalid operator: {token}");
-                            return float.NaN; // Return NaN to indicate an error
+                            return float.NaN; 
                     }
 
                     nums.Push(result);
@@ -59,8 +56,8 @@ namespace Rpn
 
             if (nums.Count != 1)
             {
-                Debug.LogError("Invalid RPN expression: too many operands.");
-                return float.NaN; // error
+                Debug.LogError("too many operands.");
+                return float.NaN;
             }
 
             return nums.Pop(); // final value
