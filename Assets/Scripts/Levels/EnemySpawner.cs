@@ -1,4 +1,3 @@
-// EnemySpawner.cs — countdown inlined inside RunWaves (always 3 seconds)
 
 using UnityEngine;
 using Newtonsoft.Json;
@@ -22,15 +21,27 @@ public class EnemySpawner : MonoBehaviour
     void Start()
     {
         // cache enemy base stats
+        // all difficulty level buttons
+        var easyButton = Instantiate(button, level_selector.transform);
+        easyButton.transform.localPosition = new Vector3(0, 60);
+        easyButton.GetComponent<MenuSelectorController>().spawner = this;
+        easyButton.GetComponent<MenuSelectorController>().SetLevel("Easy");
+
+        var mediumButton = Instantiate(button, level_selector.transform);
+        mediumButton.transform.localPosition = new Vector3(0, 0);
+        mediumButton.GetComponent<MenuSelectorController>().spawner = this;
+        mediumButton.GetComponent<MenuSelectorController>().SetLevel("Medium");
+
+        var endlessButton = Instantiate(button, level_selector.transform);
+        endlessButton.transform.localPosition = new Vector3(0, -60);
+        endlessButton.GetComponent<MenuSelectorController>().spawner = this;
+        endlessButton.GetComponent<MenuSelectorController>().SetLevel("Endless");
+
         var list = JsonConvert.DeserializeObject<List<EnemyData>>(Resources.Load<TextAsset>("enemies").text);
         enemyLUT = new Dictionary<string, EnemyData>();
         foreach (var e in list) enemyLUT[e.name] = e;
 
         // "Easy" button (default right now)
-        var sel = Instantiate(button, level_selector.transform);
-        sel.transform.localPosition = new Vector3(0, 130);
-        sel.GetComponent<MenuSelectorController>().spawner = this;
-        sel.GetComponent<MenuSelectorController>().SetLevel("Easy");
     }
 
     public void StartLevel(string levelName)
